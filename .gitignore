@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+*.docx
+*.pdf
+.cache/
+*_cache/
+.DS_Store
