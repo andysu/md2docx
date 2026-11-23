@@ -7,11 +7,9 @@ use std::process::Command;
 
 pub fn sanitize_mermaid(code: &str) -> String {
     let mut clean = code.trim().to_string();
-    // 1. Розділити приліплені коментарі %% після напрямку (graph TD%% -> graph TD\n%%)
     let re_comment = Regex::new(r"(?m)^([ \t]*(?:graph|flowchart)\s+[A-Za-z]+)%%").unwrap();
     clean = re_comment.replace_all(&clean, "$1\n%%").to_string();
 
-    // 2. Сумісність для застарілих gitGraph
     if clean.contains("gitGraph") {
         let re_options = Regex::new(r"(?s)options\s*\{[^}]*\}\s*end\s*").unwrap();
         clean = re_options.replace_all(&clean, "").to_string();
@@ -31,7 +29,7 @@ pub fn get_cache_dir() -> PathBuf {
     }
 }
 
-pub fn render_mermaid(code: &str) -> Option<Vec<u8>> {
+pub fn render_mermaid(code: &str, verbose: bool) -> Option<Vec<u8>> {
     let clean = sanitize_mermaid(code);
     let mut hasher = Sha256::new();
     hasher.update(clean.as_bytes());
@@ -43,8 +41,15 @@ pub fn render_mermaid(code: &str) -> Option<Vec<u8>> {
 
     if let Ok(bytes) = fs::read(&cache_file) {
         if bytes.len() > 100 {
+            if verbose {
+                println!("  [v] Діаграма Mermaid [{}] знайдена в локальному кеші ({} байт)", hash_hex, bytes.len());
+            }
             return Some(bytes);
         }
+    }
+
+    if verbose {
+        println!("  [v] Діаграма Mermaid [{}] відсутня в кеші, запит до Kroki API...", hash_hex);
     }
 
     // Спроба 1: Kroki POST API
@@ -58,11 +63,17 @@ pub fn render_mermaid(code: &str) -> Option<Vec<u8>> {
         let mut bytes = Vec::new();
         if resp.into_reader().read_to_end(&mut bytes).is_ok() && bytes.len() > 100 {
             let _ = fs::write(&cache_file, &bytes);
+            if verbose {
+                println!("  [v] Kroki API успішно згенерував PNG [{}] ({} байт)", hash_hex, bytes.len());
+            }
             return Some(bytes);
         }
     }
 
     // Спроба 2: mermaid.ink fallback
+    if verbose {
+        println!("  [v] Запасний виклик mermaid.ink для [{}]...", hash_hex);
+    }
     let state = serde_json::json!({
         "code": clean,
         "mermaid": { "theme": "default" }
@@ -79,13 +90,19 @@ pub fn render_mermaid(code: &str) -> Option<Vec<u8>> {
         let mut bytes = Vec::new();
         if resp.into_reader().read_to_end(&mut bytes).is_ok() && bytes.len() > 100 {
             let _ = fs::write(&cache_file, &bytes);
+            if verbose {
+                println!("  [v] mermaid.ink успішно згенерував зображення [{}]", hash_hex);
+            }
             return Some(bytes);
         }
     }
 
-    // Спроба 3: локальний mmdc якщо встановлений
+    // Спроба 3: локальний mmdc
     let tmp_file = cache_dir.join(format!("temp_{}.mmd", hash_hex));
     if fs::write(&tmp_file, &clean).is_ok() {
+        if verbose {
+            println!("  [v] Спроба локального виклику mmdc для [{}]...", hash_hex);
+        }
         let status = Command::new("mmdc")
             .args(["-i", tmp_file.to_str().unwrap(), "-o", cache_file.to_str().unwrap(), "-b", "white"])
             .output();
@@ -94,6 +111,9 @@ pub fn render_mermaid(code: &str) -> Option<Vec<u8>> {
             if out.status.success() {
                 if let Ok(bytes) = fs::read(&cache_file) {
                     if bytes.len() > 100 {
+                        if verbose {
+                            println!("  [v] mmdc успішно відрендерив PNG [{}]", hash_hex);
+                        }
                         return Some(bytes);
                     }
                 }
@@ -101,5 +121,8 @@ pub fn render_mermaid(code: &str) -> Option<Vec<u8>> {
         }
     }
 
+    if verbose {
+        eprintln!("  [v] Попередження: не вдалося відрендерити діаграму [{}]", hash_hex);
+    }
     None
 }

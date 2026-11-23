@@ -53,7 +53,6 @@ pub fn set_nested_value(data: &mut Value, dotted_key: &str, value: &str) {
 
     if let Some(last) = parts.last() {
         if let Some(map) = current.as_object_mut() {
-            // Спробуємо розпарсити як число/bool/json, інакше як звичайний рядок
             let parsed_val = serde_json::from_str::<Value>(value)
                 .unwrap_or_else(|_| Value::String(value.to_string()));
             map.insert(last.to_string(), parsed_val);
@@ -61,7 +60,7 @@ pub fn set_nested_value(data: &mut Value, dotted_key: &str, value: &str) {
     }
 }
 
-pub fn load_data_files(paths: &[PathBuf]) -> Result<Value, String> {
+pub fn load_data_files(paths: &[PathBuf], verbose: bool) -> Result<Value, String> {
     let mut merged = Value::Object(Map::new());
     for p in paths {
         if !p.exists() {
@@ -71,6 +70,9 @@ pub fn load_data_files(paths: &[PathBuf]) -> Result<Value, String> {
             .map_err(|e| format!("Не вдалося прочитати {}: {}", p.display(), e))?;
         let chunk: Value = serde_yaml::from_str(&content)
             .map_err(|e| format!("Помилка YAML у {}: {}", p.display(), e))?;
+        if verbose {
+            println!("  [v] Завантажено data-файл: {}", p.display());
+        }
         deep_merge(&mut merged, &chunk);
     }
     Ok(merged)
@@ -81,16 +83,28 @@ pub fn render_template(
     data_paths: &[PathBuf],
     cli_vars: &[String],
     keep_md: Option<&Path>,
+    verbose: bool,
 ) -> Result<String, String> {
+    if verbose {
+        println!("  [v] Зчитування шаблону: {}", template_path.display());
+    }
     let raw = fs::read_to_string(template_path)
         .map_err(|e| format!("Не вдалося відкрити {}: {}", template_path.display(), e))?;
 
     let (mut context, body) = split_front_matter(&raw);
-    let ext_data = load_data_files(data_paths)?;
+    if verbose && context.is_object() && !context.as_object().unwrap().is_empty() {
+        let keys: Vec<String> = context.as_object().unwrap().keys().cloned().collect();
+        println!("  [v] Front matter містить дефолтні змінні: {:?}", keys);
+    }
+
+    let ext_data = load_data_files(data_paths, verbose)?;
     deep_merge(&mut context, &ext_data);
 
     for pair in cli_vars {
         if let Some((k, v)) = pair.split_once('=') {
+            if verbose {
+                println!("  [v] CLI оверрайд змінної: {} = {}", k.trim(), v.trim());
+            }
             set_nested_value(&mut context, k.trim(), v.trim());
         }
     }
@@ -99,9 +113,14 @@ pub fn render_template(
     env.set_trim_blocks(true);
     env.set_lstrip_blocks(true);
 
+    let t_start = std::time::Instant::now();
     let rendered = env
         .render_str(&body, &context)
         .map_err(|e| format!("Помилка шаблонізації Jinja2: {}", e))?;
+
+    if verbose {
+        println!("  [v] Шаблонізація Jinja2 виконана за {:?}", t_start.elapsed());
+    }
 
     if let Some(keep_path) = keep_md {
         if let Some(parent) = keep_path.parent() {
@@ -109,6 +128,9 @@ pub fn render_template(
         }
         fs::write(keep_path, &rendered)
             .map_err(|e| format!("Не вдалося зберегти {}: {}", keep_path.display(), e))?;
+        if verbose {
+            println!("  [v] Заповнений MD збережено: {}", keep_path.display());
+        }
     }
 
     Ok(rendered)

@@ -43,8 +43,14 @@ python3 md2docx.py --help
 ## Використання
 
 ```bash
+# Довідка з прикладами (також показується при запуску без аргументів)
+md2docx --help
+
 # Конвертація документа
 md2docx document.md -o output.docx
+
+# Детальний покроковий вивід кожного етапу (verbose)
+md2docx document.md -o output.docx -v
 
 # З підстановкою даних із YAML
 md2docx template.md -o output.docx --data data.yaml

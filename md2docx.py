@@ -2281,6 +2281,14 @@ def main() -> None:
              "запису .docx. -o/--output не потрібен у цьому режимі. Формули не "
              "перевіряються через Pandoc у цьому режимі (для швидкості на великих файлах).",
     )
+    parser_cli.add_argument(
+        "-v", "--verbose", action="store_true",
+        help="детальний покроковий вивід виконання (verbose)",
+    )
+    if len(sys.argv) <= 1:
+        parser_cli.print_help()
+        sys.exit(0)
+
     args = parser_cli.parse_args()
 
     if not args.check and args.output is None:

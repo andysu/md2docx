@@ -71,6 +71,7 @@ pub fn convert_markdown_to_docx(
     md_text: &str,
     output_path: &Path,
     _source_dir: Option<&Path>,
+    verbose: bool,
 ) -> Result<ConvertStats, String> {
     let mut doc = Docx::new();
 
@@ -92,7 +93,6 @@ pub fn convert_markdown_to_docx(
 
     let parser = Parser::new_ext(md_text, options);
 
-    // Стан конвертера
     let mut current_paragraph: Option<Paragraph> = None;
     let mut bold = false;
     let mut italic = false;
@@ -117,6 +117,7 @@ pub fn convert_markdown_to_docx(
                         &blockquote_events,
                         &mut doc,
                         &mut stats,
+                        verbose,
                     );
                     blockquote_events.clear();
                 }
@@ -178,7 +179,7 @@ pub fn convert_markdown_to_docx(
                 let lang_clean = code_lang.trim().to_lowercase();
                 if lang_clean == "mermaid" {
                     stats.mermaid_diagrams += 1;
-                    if let Some(png_bytes) = crate::mermaid::render_mermaid(&code_content) {
+                    if let Some(png_bytes) = crate::mermaid::render_mermaid(&code_content, verbose) {
                         let pic = Pic::new(&png_bytes).size(500 * 9525, 280 * 9525);
                         let p = Paragraph::new()
                             .align(AlignmentType::Center)
@@ -186,7 +187,6 @@ pub fn convert_markdown_to_docx(
                             .add_run(Run::new().add_image(pic));
                         doc = doc.add_paragraph(p);
                     } else {
-                        // Fallback: як звичайний блок коду
                         doc = render_code_block_box(doc, &code_content, &code_lang);
                     }
                 } else {
@@ -271,7 +271,7 @@ pub fn convert_markdown_to_docx(
                     let r = Run::new()
                         .add_text(code.as_ref())
                         .fonts(RunFonts::new().ascii("Consolas").hi_ansi("Consolas"))
-                        .size(19) // 9.5 pt
+                        .size(19)
                         .color("0F172A");
                     current_paragraph = Some(p.add_run(r));
                 }
@@ -297,6 +297,10 @@ pub fn convert_markdown_to_docx(
         }
     }
 
+    if verbose {
+        println!("  [v] Побудова DOCX дерева: {} абзаців, {} заголовків, {} таблиць", stats.paragraphs, stats.headings, stats.tables);
+    }
+
     if let Some(parent) = output_path.parent() {
         let _ = fs::create_dir_all(parent);
     }
@@ -306,6 +310,12 @@ pub fn convert_markdown_to_docx(
     doc.build()
         .pack(&mut file)
         .map_err(|e| format!("Помилка генерації DOCX: {}", e))?;
+
+    if verbose {
+        if let Ok(meta) = fs::metadata(output_path) {
+            println!("  [v] Пакет DOCX збережено: {} (розмір: {} байт)", output_path.display(), meta.len());
+        }
+    }
 
     Ok(stats)
 }
@@ -359,7 +369,7 @@ fn render_code_block_box(doc: Docx, code: &str, lang: &str) -> Docx {
                 Run::new()
                     .add_text(line_txt)
                     .fonts(RunFonts::new().ascii("Consolas").hi_ansi("Consolas"))
-                    .size(18) // 9 pt
+                    .size(18)
                     .color("1E293B"),
             );
         cell = cell.add_paragraph(p_line);
@@ -374,6 +384,7 @@ fn render_blockquote(
     events: &[Event<'static>],
     doc: &mut Docx,
     stats: &mut ConvertStats,
+    verbose: bool,
 ) {
     let mut full_text = String::new();
     for ev in events {
@@ -395,19 +406,21 @@ fn render_blockquote(
     if let Some(at) = detected_type {
         stats.callouts += 1;
         let style = get_callout_style(at);
+        if verbose {
+            println!("  [v] Стилізація Callout-блоку [!{}] -> {}", at, style.label);
+        }
         let cell = TableCell::new()
             .shading(Shading::new().fill(style.bg_color))
             .set_border(
                 TableCellBorder::new(TableCellBorderPosition::Left)
                     .border_type(BorderType::Single)
-                    .size(24) // 3 pt
+                    .size(24)
                     .color(style.border_color),
             )
             .clear_border(TableCellBorderPosition::Top)
             .clear_border(TableCellBorderPosition::Right)
             .clear_border(TableCellBorderPosition::Bottom);
 
-        // Заголовок Callout
         let p_title = Paragraph::new()
             .line_spacing(LineSpacing::new().before(20).after(40))
             .add_run(
@@ -451,7 +464,6 @@ fn render_blockquote(
             .margins(TableCellMargins::new().margin(140, 200, 140, 200));
         *doc = doc.clone().add_table(table);
     } else {
-        // Звичайна цитата
         let mut p = Paragraph::new()
             .indent(Some(360), None, None, None)
             .line_spacing(LineSpacing::new().before(40).after(40));

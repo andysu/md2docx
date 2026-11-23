@@ -5,11 +5,22 @@ use std::path::PathBuf;
 #[command(
     name = "md2docx",
     about = "Універсальний високошвидкісний конвертер Markdown у DOCX (Mermaid, Callouts, OMML)",
-    version
+    version,
+    after_help = "ПРИКЛАДИ:\n  \
+        # Звичайна конвертація\n  \
+        md2docx document.md -o output.docx\n\n  \
+        # Детальний verbose-вивід конвеєра\n  \
+        md2docx document.md -o output.docx -v\n\n  \
+        # З підстановкою даних із YAML-файлу\n  \
+        md2docx template.md -o output.docx --data data.yaml\n\n  \
+        # Перевизначення змінних через CLI\n  \
+        md2docx template.md -o output.docx --var client.name=\"ТОВ Ромашка\"\n\n  \
+        # Швидка перевірка документа без запису .docx\n  \
+        md2docx document.md --check\n"
 )]
 pub struct Cli {
     /// Вхідний .md файл (шаблон або звичайний markdown)
-    pub template: PathBuf,
+    pub template: Option<PathBuf>,
 
     /// Шлях до вихідного .docx файлу
     #[arg(short, long)]
@@ -30,4 +41,8 @@ pub struct Cli {
     /// Тільки перевірити документ і надрукувати звіт без збереження .docx
     #[arg(long)]
     pub check: bool,
+
+    /// Детальний вивід процесу виконання (verbose)
+    #[arg(short, long)]
+    pub verbose: bool,
 }
