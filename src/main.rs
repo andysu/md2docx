@@ -3,6 +3,7 @@ mod converter;
 mod mermaid;
 mod pdf_converter;
 mod template;
+mod typst_backend;
 
 use clap::{CommandFactory, Parser};
 use cli::Cli;
@@ -85,39 +86,30 @@ fn main() {
     let ext = output_path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
 
     if ext == "pdf" {
-        let tmp_docx = std::env::temp_dir().join(format!("md2docx_tmp_{}.docx", std::process::id()));
-        let mut soffice_success = false;
-
-        if let Ok(_) = converter::convert_markdown_to_docx(&rendered_text, &tmp_docx, template_path.parent(), args.verbose) {
-            match convert_docx_to_pdf_with_soffice(&tmp_docx, &output_path, args.verbose) {
-                Ok(()) => {
-                    soffice_success = true;
-                    println!("Готово: {} (високоякісна конвертація через LibreOffice за {:?})", output_path.display(), start.elapsed());
-                }
-                Err(e) => {
-                    if args.verbose {
-                        println!("  [v] soffice недоступний ({}), перемикання на автономний рушій...", e);
-                    }
-                }
-            }
-            let _ = std::fs::remove_file(&tmp_docx);
+        if args.verbose {
+            println!("  [v] Пряма генерація PDF через вбудований векторний рушій Typst");
         }
-
-        if !soffice_success {
-            if args.verbose {
-                println!("  [v] Режим автономного рендерингу в PDF");
+        match typst_backend::convert_markdown_to_pdf_typst(
+            &rendered_text,
+            &output_path,
+            template_path.parent(),
+            args.verbose,
+        ) {
+            Ok(stats) => {
+                println!("Готово: {} (за {:?})", output_path.display(), start.elapsed());
+                if stats.images > 0 {
+                    println!("Вбудовано графіків/зображень: {}", stats.images);
+                }
+                if stats.tables > 0 {
+                    println!("Сформовано таблиць: {}", stats.tables);
+                }
+                if stats.callouts > 0 {
+                    println!("Стилізовано блоків висновків (Callouts): {}", stats.callouts);
+                }
             }
-            match pdf_converter::convert_markdown_to_pdf(&rendered_text, &output_path, template_path.parent(), args.verbose) {
-                Ok(stats) => {
-                    println!("Готово: {} (за {:?})", output_path.display(), start.elapsed());
-                    if stats.mermaid_diagrams > 0 {
-                        println!("Вбудовано діаграм Mermaid: {}", stats.mermaid_diagrams);
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Помилка генерації PDF: {}", e);
-                    process::exit(1);
-                }
+            Err(e) => {
+                eprintln!("Помилка генерації PDF через Typst: {}", e);
+                process::exit(1);
             }
         }
 
@@ -142,21 +134,19 @@ fn main() {
                     let mut pdf_out = output_path.clone();
                     pdf_out.set_extension("pdf");
                     if args.verbose {
-                        println!("  [v] Генерація супутнього PDF: {}", pdf_out.display());
+                        println!("  [v] Генерація супутнього PDF через Typst: {}", pdf_out.display());
                     }
-                    match convert_docx_to_pdf_with_soffice(&output_path, &pdf_out, args.verbose) {
-                        Ok(()) => {
-                            println!("Також згенеровано PDF (високоякісно через LibreOffice): {}", pdf_out.display());
+                    match typst_backend::convert_markdown_to_pdf_typst(
+                        &rendered_text,
+                        &pdf_out,
+                        template_path.parent(),
+                        args.verbose,
+                    ) {
+                        Ok(_) => {
+                            println!("Також згенеровано PDF через Typst: {}", pdf_out.display());
                         }
                         Err(e) => {
-                            if args.verbose {
-                                println!("  [v] soffice недоступний ({}), спроба автономної генерації...", e);
-                            }
-                            if let Err(e2) = pdf_converter::convert_markdown_to_pdf(&rendered_text, &pdf_out, template_path.parent(), args.verbose) {
-                                eprintln!("Попередження: не вдалося згенерувати супутній PDF: {}", e2);
-                            } else {
-                                println!("Також автономно згенеровано PDF: {}", pdf_out.display());
-                            }
+                            eprintln!("Попередження: не вдалося згенерувати супутній PDF: {}", e);
                         }
                     }
                 }
@@ -169,6 +159,7 @@ fn main() {
     }
 }
 
+#[allow(dead_code)]
 fn convert_docx_to_pdf_with_soffice(
     docx_path: &std::path::Path,
     pdf_output_path: &std::path::Path,
