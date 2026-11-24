@@ -1,6 +1,7 @@
 mod cli;
 mod converter;
 mod mermaid;
+mod pdf_converter;
 mod template;
 
 use clap::{CommandFactory, Parser};
@@ -81,22 +82,58 @@ fn main() {
     }
 
     let output_path = args.output.unwrap();
-    match converter::convert_markdown_to_docx(&rendered_text, &output_path, template_path.parent(), args.verbose) {
-        Ok(stats) => {
-            println!("Готово: {} (за {:?})", output_path.display(), start.elapsed());
-            if let Some(keep) = args.keep_md {
-                println!("Заповнений MD збережено: {}", keep.display());
+    let ext = output_path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+
+    if ext == "pdf" {
+        if args.verbose {
+            println!("  [v] Режим автономного рендерингу в PDF");
+        }
+        match pdf_converter::convert_markdown_to_pdf(&rendered_text, &output_path, template_path.parent(), args.verbose) {
+            Ok(stats) => {
+                println!("Готово: {} (за {:?})", output_path.display(), start.elapsed());
+                if let Some(keep) = args.keep_md {
+                    println!("Заповнений MD збережено: {}", keep.display());
+                }
+                if stats.mermaid_diagrams > 0 {
+                    println!("Вбудовано діаграм Mermaid: {}", stats.mermaid_diagrams);
+                }
             }
-            if stats.mermaid_diagrams > 0 {
-                println!("Вбудовано діаграм Mermaid: {}", stats.mermaid_diagrams);
-            }
-            if stats.callouts > 0 {
-                println!("Стилізовано Callout-блоків: {}", stats.callouts);
+            Err(e) => {
+                eprintln!("Помилка генерації PDF: {}", e);
+                process::exit(1);
             }
         }
-        Err(e) => {
-            eprintln!("Помилка конвертації: {}", e);
-            process::exit(1);
+    } else {
+        match converter::convert_markdown_to_docx(&rendered_text, &output_path, template_path.parent(), args.verbose) {
+            Ok(stats) => {
+                println!("Готово: {} (за {:?})", output_path.display(), start.elapsed());
+                if let Some(keep) = args.keep_md {
+                    println!("Заповнений MD збережено: {}", keep.display());
+                }
+                if stats.mermaid_diagrams > 0 {
+                    println!("Вбудовано діаграм Mermaid: {}", stats.mermaid_diagrams);
+                }
+                if stats.callouts > 0 {
+                    println!("Стилізовано Callout-блоків: {}", stats.callouts);
+                }
+
+                if args.pdf {
+                    let mut pdf_out = output_path.clone();
+                    pdf_out.set_extension("pdf");
+                    if args.verbose {
+                        println!("  [v] Генерація супутнього PDF: {}", pdf_out.display());
+                    }
+                    if let Err(e) = pdf_converter::convert_markdown_to_pdf(&rendered_text, &pdf_out, template_path.parent(), args.verbose) {
+                        eprintln!("Попередження: не вдалося згенерувати супутній PDF: {}", e);
+                    } else {
+                        println!("Також автономно згенеровано PDF: {}", pdf_out.display());
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Помилка конвертації: {}", e);
+                process::exit(1);
+            }
         }
     }
 }

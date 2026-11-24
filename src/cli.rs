@@ -22,9 +22,13 @@ pub struct Cli {
     /// Вхідний .md файл (шаблон або звичайний markdown)
     pub template: Option<PathBuf>,
 
-    /// Шлях до вихідного .docx файлу
+    /// Шлях до вихідного файлу (.docx або .pdf)
     #[arg(short, long)]
     pub output: Option<PathBuf>,
+
+    /// Додатково генерувати автономний PDF файл поруч із DOCX
+    #[arg(long)]
+    pub pdf: bool,
 
     /// YAML data-файли зі змінними (можна вказати кілька разів)
     #[arg(long, value_name = "FILE")]
