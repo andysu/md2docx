@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use pulldown_cmark::{Alignment, Event, HeadingLevel, Parser, Tag, TagEnd};
+use pulldown_cmark::{Alignment, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use typst::diag::{FileError, FileResult};
 use typst::foundations::{Bytes, Datetime, Duration};
 use typst::syntax::{FileId, RootedPath, Source, VirtualPath, VirtualRoot};
@@ -186,7 +186,7 @@ pub fn markdown_to_typst(md_text: &str) -> (String, TypstStats) {
     out.push_str(r##"
 #set page(
   paper: "a4",
-  margin: (x: 18mm, top: 20mm, bottom: 20mm),
+  margin: (x: 16mm, top: 16mm, bottom: 16mm),
   header: align(right)[
     #text(size: 8pt, fill: rgb("#718096"), font: ("DejaVu Sans", "Liberation Sans"))[
       Аудит СЕС «Тепломережа» | Конфіденційно
@@ -211,24 +211,30 @@ pub fn markdown_to_typst(md_text: &str) -> (String, TypstStats) {
   lang: "uk"
 )
 
-#set par(justify: true, leading: 0.65em)
+#set par(justify: true, leading: 0.6em)
 
 #show heading: set text(fill: rgb("#1a202c"), font: ("DejaVu Sans", "Liberation Sans"))
-#show heading.where(level: 1): it => block(spacing: 1.5em)[
+#show heading.where(level: 1): it => block(spacing: 1.2em)[
   #text(size: 15pt, weight: "bold", fill: rgb("#0d6efd"))[#it.body]
-  #v(0.3em)
+  #v(0.25em)
   #line(length: 100%, stroke: 0.75pt + rgb("#0d6efd"))
 ]
-#show heading.where(level: 2): it => block(spacing: 1.2em)[
+#show heading.where(level: 2): it => block(spacing: 1.0em)[
   #text(size: 12pt, weight: "bold", fill: rgb("#1a202c"))[#it.body]
 ]
-#show heading.where(level: 3): it => block(spacing: 1.0em)[
+#show heading.where(level: 3): it => block(spacing: 0.8em)[
   #text(size: 10.5pt, weight: "bold", fill: rgb("#2d3748"))[#it.body]
 ]
 
 "##);
 
-    let parser = Parser::new(&normalized);
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_TABLES);
+    options.insert(Options::ENABLE_FOOTNOTES);
+    options.insert(Options::ENABLE_STRIKETHROUGH);
+    options.insert(Options::ENABLE_TASKLISTS);
+    options.insert(Options::ENABLE_MATH);
+    let parser = Parser::new_ext(&normalized, options);
 
     let mut in_table = false;
     let mut table_cells: Vec<Vec<String>> = Vec::new();
@@ -423,13 +429,16 @@ pub fn markdown_to_typst(md_text: &str) -> (String, TypstStats) {
                 }
                 TagEnd::TableCell => {
                     current_row.push(current_cell.clone());
+                    current_cell.clear();
                 }
                 TagEnd::TableRow => {
                     table_cells.push(current_row.clone());
+                    current_row.clear();
                 }
                 TagEnd::TableHead => {
                     _in_table_head = false;
                     table_cells.push(current_row.clone());
+                    current_row.clear();
                 }
                 TagEnd::Table => {
                     in_table = false;
@@ -438,17 +447,20 @@ pub fn markdown_to_typst(md_text: &str) -> (String, TypstStats) {
                         let cols_str = vec!["auto"; num_cols].join(", ");
 
                         out.push_str(&format!(
-                            "\n#align(center)[\n#table(\n  columns: ({}),\n  fill: (col, row) => if row == 0 {{ rgb(\"#f1f5f9\") }} else if calc.even(row) {{ rgb(\"#f8fafc\") }} else {{ none }},\n  stroke: 0.5pt + rgb(\"#cbd5e1\"),\n  align: (col, row) => if row == 0 {{ center + horizon }} else {{ left + horizon }},\n  inset: (x: 8pt, y: 6pt),\n",
+                            "\n#align(center)[\n#set text(size: 8.5pt)\n#table(\n  columns: ({}),\n  fill: (col, row) => if row == 0 {{ rgb(\"#f1f5f9\") }} else if calc.even(row) {{ rgb(\"#f8fafc\") }} else {{ none }},\n  stroke: 0.5pt + rgb(\"#cbd5e1\"),\n  align: (col, row) => if row == 0 {{ center + horizon }} else {{ left + horizon }},\n  inset: (x: 5pt, y: 3.5pt),\n",
                             cols_str
                         ));
 
                         for (r_idx, row) in table_cells.iter().enumerate() {
-                            for cell in row {
-                                let c_trimmed = cell.trim();
-                                if r_idx == 0 {
-                                    out.push_str(&format!("  [*{}*],\n", c_trimmed));
-                                } else {
-                                    out.push_str(&format!("  [{}],\n", c_trimmed));
+                            if r_idx == 0 {
+                                out.push_str("  table.header(\n");
+                                for cell in row {
+                                    out.push_str(&format!("    [#text(weight: \"bold\")[{}]],\n", cell.trim()));
+                                }
+                                out.push_str("  ),\n");
+                            } else {
+                                for cell in row {
+                                    out.push_str(&format!("  [{}],\n", cell.trim()));
                                 }
                             }
                         }
@@ -527,7 +539,7 @@ pub fn markdown_to_typst(md_text: &str) -> (String, TypstStats) {
                 }
             }
             Event::Rule => {
-                out.push_str("\n#line(length: 100%, stroke: 0.5pt + rgb(\"#cbd5e1\"))\n\n");
+                out.push_str("\n#v(0.6em)\n#line(length: 100%, stroke: 0.5pt + rgb(\"#cbd5e1\"))\n#v(0.6em)\n\n");
             }
             _ => {}
         }
@@ -604,5 +616,20 @@ mod tests {
         assert_eq!(doc.pages().len(), 1);
         let pdf_data = pdf(&doc, &PdfOptions::default()).expect("PDF export failed");
         assert!(!pdf_data.is_empty());
+    }
+
+    #[test]
+    fn test_typst_table_compilation() {
+        let md = r#"
+| Місяць | PV1 (кВт·год) | PV2 (кВт·год) |
+|---|---|---|
+| **Вересень 2026** | 681.7 | 856.1 |
+| **Жовтень 2026** | 518.7 | 694.9 |
+"#;
+        let (typst_markup, stats) = markdown_to_typst(md);
+        assert_eq!(stats.tables, 1);
+        let world = TypstWorld::new(typst_markup, None).expect("World init failed");
+        let warned = typst::compile::<PagedDocument>(&world);
+        assert!(warned.output.is_ok(), "Table compilation failed: {:?}", warned.output.err());
     }
 }
