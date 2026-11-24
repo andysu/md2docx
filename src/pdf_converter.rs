@@ -6,11 +6,37 @@ use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use std::path::{Path, PathBuf};
 
 pub fn find_font_family() -> Result<fonts::FontFamily<fonts::FontData>, String> {
+    // 1. Перший пріоритет: DejaVuSans (містить повну підтримку символів: ✔, ✕, ⚠ тощо)
+    let dejavu_dirs = [
+        "/usr/share/fonts/dejavu-sans-fonts",
+        "/usr/share/fonts/dejavu",
+        "/usr/share/fonts/truetype/dejavu",
+    ];
+    for dir in &dejavu_dirs {
+        let p_reg = Path::new(dir).join("DejaVuSans.ttf");
+        let p_bold = Path::new(dir).join("DejaVuSans-Bold.ttf");
+        let p_italic = Path::new(dir).join("DejaVuSans-Oblique.ttf");
+        let p_bold_italic = Path::new(dir).join("DejaVuSans-BoldOblique.ttf");
+        if p_reg.exists() && p_bold.exists() {
+            if let (Ok(regular), Ok(bold), Ok(italic), Ok(bold_italic)) = (
+                fonts::FontData::load(&p_reg, None),
+                fonts::FontData::load(&p_bold, None),
+                fonts::FontData::load(if p_italic.exists() { &p_italic } else { &p_reg }, None),
+                fonts::FontData::load(if p_bold_italic.exists() { &p_bold_italic } else { &p_bold }, None),
+            ) {
+                return Ok(fonts::FontFamily {
+                    regular,
+                    bold,
+                    italic,
+                    bold_italic,
+                });
+            }
+        }
+    }
+
     let candidates = [
         ("/usr/share/fonts/liberation-sans-fonts", "LiberationSans"),
         ("/usr/share/fonts/google-carlito-fonts", "Carlito"),
-        ("/usr/share/fonts/truetype/dejavu", "DejaVuSans"),
-        ("/usr/share/fonts/dejavu", "DejaVuSans"),
         ("/usr/share/fonts/truetype/liberation", "LiberationSans"),
         ("/usr/share/fonts/TTF", "DejaVuSans"),
         ("/Library/Fonts", "Arial"),
@@ -27,7 +53,7 @@ pub fn find_font_family() -> Result<fonts::FontFamily<fonts::FontData>, String> 
         }
     }
 
-    Err("Не знайдено системного TTF шрифту (LiberationSans, Carlito, DejaVuSans). Встановіть шрифти або перевірте шлях.".to_string())
+    Err("Не знайдено системного TTF шрифту (DejaVuSans, LiberationSans, Carlito). Встановіть шрифти або перевірте шлях.".to_string())
 }
 
 fn convert_dynamic_image_to_genpdf(dyn_img: image::DynamicImage) -> Result<elements::Image, String> {
@@ -46,12 +72,15 @@ fn convert_dynamic_image_to_genpdf(dyn_img: image::DynamicImage) -> Result<eleme
         image::DynamicImage::ImageRgb8(dyn_img.to_rgb8())
     };
 
-    let (w, _h) = (rgb_img.width() as f32, rgb_img.height() as f32);
-    let target_width_pt: f32 = 175.0 / 0.3528; // ~496 pt (~175 mm)
-    let scale = if w > 0.0 {
-        (target_width_pt / w).min(0.55f32)
+    let (w, _h) = (rgb_img.width() as f64, rgb_img.height() as f64);
+    // Ширина сторінки A4 = 210 мм, поля по 12 мм з кожного боку => доступно 186 мм.
+    // За формулою genpdf: width_mm = 25.4 * (scale * px_width) / 300.0.
+    // Масштабуємо зображення точно на повну ширину сторінки (182 мм):
+    let target_width_mm: f64 = 182.0;
+    let scale: f64 = if w > 0.0 {
+        (target_width_mm * 300.0) / (25.4 * w)
     } else {
-        0.55f32
+        1.0
     };
 
     elements::Image::from_dynamic_image(rgb_img)
@@ -113,7 +142,14 @@ pub fn convert_markdown_to_pdf(
     options.insert(Options::ENABLE_TASKLISTS);
     options.insert(Options::ENABLE_MATH);
 
-    let parser = Parser::new_ext(md_text, options);
+    let normalized_text = md_text
+        .replace("✅", "✔ ")
+        .replace("✔️", "✔ ")
+        .replace("❌", "✕ ")
+        .replace("⚠️", "⚠ ")
+        .replace("\u{fe0f}", ""); // видалення variation selector
+
+    let parser = Parser::new_ext(&normalized_text, options);
 
     let mut current_paragraph: Option<elements::Paragraph> = None;
     let mut current_heading_level: Option<HeadingLevel> = None;
