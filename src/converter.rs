@@ -71,7 +71,7 @@ pub struct ConvertStats {
 pub fn convert_markdown_to_docx(
     md_text: &str,
     output_path: &Path,
-    _source_dir: Option<&Path>,
+    source_dir: Option<&Path>,
     verbose: bool,
 ) -> Result<ConvertStats, String> {
     let mut doc = Docx::new();
@@ -108,6 +108,10 @@ pub fn convert_markdown_to_docx(
     let mut table_rows: Vec<TableRow> = Vec::new();
     let mut current_row: Vec<TableCell> = Vec::new();
     let mut is_header_row = false;
+
+    let mut in_image = false;
+    let mut image_url = String::new();
+    let mut paragraph_has_content = false;
 
     for event in parser {
         if in_blockquote {
@@ -156,7 +160,7 @@ pub fn convert_markdown_to_docx(
                 }
             }
             Event::Start(Tag::Paragraph) => {
-                stats.paragraphs += 1;
+                paragraph_has_content = false;
                 current_paragraph = Some(
                     Paragraph::new()
                         .line_spacing(LineSpacing::new().before(40).after(100)),
@@ -164,7 +168,52 @@ pub fn convert_markdown_to_docx(
             }
             Event::End(TagEnd::Paragraph) => {
                 if let Some(p) = current_paragraph.take() {
-                    doc = doc.add_paragraph(p);
+                    if paragraph_has_content {
+                        stats.paragraphs += 1;
+                        doc = doc.add_paragraph(p);
+                    }
+                }
+            }
+            Event::Start(Tag::Image { dest_url, .. }) => {
+                in_image = true;
+                image_url = dest_url.to_string();
+            }
+            Event::End(TagEnd::Image) => {
+                in_image = false;
+                if !image_url.is_empty() {
+                    let img_path = if let Some(dir) = source_dir {
+                        dir.join(&image_url)
+                    } else {
+                        std::path::PathBuf::from(&image_url)
+                    };
+                    if img_path.exists() {
+                        if let Ok(bytes) = std::fs::read(&img_path) {
+                            if let Ok(dyn_img) = image::load_from_memory(&bytes) {
+                                use image::GenericImageView;
+                                let (w, h) = dyn_img.dimensions();
+                                let max_w_emu = 5_760_000u32;
+                                let (w_emu, h_emu) = if w > 0 {
+                                    let calc_w = max_w_emu;
+                                    let calc_h = (h as u64 * max_w_emu as u64 / w as u64) as u32;
+                                    (calc_w, calc_h)
+                                } else {
+                                    (500 * 9525, 280 * 9525)
+                                };
+                                if verbose {
+                                    println!("  [v] Вбудовування зображення у DOCX: {}", img_path.display());
+                                }
+                                let pic = Pic::new(&bytes).size(w_emu, h_emu);
+                                let p = Paragraph::new()
+                                    .align(AlignmentType::Center)
+                                    .line_spacing(LineSpacing::new().before(140).after(140))
+                                    .add_run(Run::new().add_image(pic));
+                                doc = doc.add_paragraph(p);
+                            }
+                        }
+                    } else if verbose {
+                        eprintln!("  [!] Зображення для DOCX не знайдено: {}", img_path.display());
+                    }
+                    image_url.clear();
                 }
             }
             Event::Start(Tag::CodeBlock(kind)) => {
@@ -253,7 +302,12 @@ pub fn convert_markdown_to_docx(
             Event::Text(txt) => {
                 if in_code_block {
                     code_content.push_str(&txt);
+                } else if in_image {
+                    // skip alt text in paragraph
                 } else if let Some(p) = current_paragraph.take() {
+                    if !txt.trim().is_empty() {
+                        paragraph_has_content = true;
+                    }
                     let mut r = Run::new().add_text(txt.as_ref());
                     if bold || is_header_row {
                         r = r.bold();
@@ -269,6 +323,7 @@ pub fn convert_markdown_to_docx(
             }
             Event::Code(code) => {
                 if let Some(p) = current_paragraph.take() {
+                    paragraph_has_content = true;
                     let r = Run::new()
                         .add_text(code.as_ref())
                         .fonts(RunFonts::new().ascii("Consolas").hi_ansi("Consolas"))
