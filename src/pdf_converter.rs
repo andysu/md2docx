@@ -1,8 +1,8 @@
 use genpdf::Alignment;
 use genpdf::Element as _;
 use genpdf::{elements, fonts, style, Document};
+use image::GenericImageView;
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
-use std::fs;
 use std::path::{Path, PathBuf};
 
 pub fn find_font_family() -> Result<fonts::FontFamily<fonts::FontData>, String> {
@@ -28,6 +28,45 @@ pub fn find_font_family() -> Result<fonts::FontFamily<fonts::FontData>, String> 
     }
 
     Err("Не знайдено системного TTF шрифту (LiberationSans, Carlito, DejaVuSans). Встановіть шрифти або перевірте шлях.".to_string())
+}
+
+fn convert_dynamic_image_to_genpdf(dyn_img: image::DynamicImage) -> Result<elements::Image, String> {
+    let rgb_img = if dyn_img.color().has_alpha() {
+        let rgba = dyn_img.to_rgba8();
+        let mut rgb = image::RgbImage::new(rgba.width(), rgba.height());
+        for (x, y, pixel) in rgba.enumerate_pixels() {
+            let alpha = pixel[3] as f32 / 255.0;
+            let r = (pixel[0] as f32 * alpha + 255.0 * (1.0 - alpha)) as u8;
+            let g = (pixel[1] as f32 * alpha + 255.0 * (1.0 - alpha)) as u8;
+            let b = (pixel[2] as f32 * alpha + 255.0 * (1.0 - alpha)) as u8;
+            rgb.put_pixel(x, y, image::Rgb([r, g, b]));
+        }
+        image::DynamicImage::ImageRgb8(rgb)
+    } else {
+        image::DynamicImage::ImageRgb8(dyn_img.to_rgb8())
+    };
+
+    let (w, _h) = (rgb_img.width() as f32, rgb_img.height() as f32);
+    let target_width_pt: f32 = 175.0 / 0.3528; // ~496 pt (~175 mm)
+    let scale = if w > 0.0 {
+        (target_width_pt / w).min(0.55f32)
+    } else {
+        0.55f32
+    };
+
+    elements::Image::from_dynamic_image(rgb_img)
+        .map(|img| img.with_scale(genpdf::Scale::new(scale, scale)).with_alignment(Alignment::Center))
+        .map_err(|e| format!("Помилка створення Image для genpdf: {:?}", e))
+}
+
+fn load_image_rgb(path: &Path) -> Result<elements::Image, String> {
+    let dyn_img = image::open(path).map_err(|e| format!("Помилка читання файлу {}: {}", path.display(), e))?;
+    convert_dynamic_image_to_genpdf(dyn_img)
+}
+
+fn load_image_bytes_rgb(bytes: &[u8]) -> Result<elements::Image, String> {
+    let dyn_img = image::load_from_memory(bytes).map_err(|e| format!("Помилка декодування зображення: {}", e))?;
+    convert_dynamic_image_to_genpdf(dyn_img)
 }
 
 pub fn convert_markdown_to_pdf(
@@ -93,6 +132,7 @@ pub fn convert_markdown_to_pdf(
 
     let mut in_image = false;
     let mut image_url = String::new();
+    let mut paragraph_has_text = false;
 
     for event in parser {
         match event {
@@ -117,15 +157,18 @@ pub fn convert_markdown_to_pdf(
 
             Event::Start(Tag::Paragraph) => {
                 if !in_table && !in_image {
-                    stats.paragraphs += 1;
+                    paragraph_has_text = false;
                     current_paragraph = Some(elements::Paragraph::default());
                 }
             }
             Event::End(TagEnd::Paragraph) => {
                 if !in_table && !in_image {
                     if let Some(p) = current_paragraph.take() {
-                        doc.push(p.styled(style::Style::new().with_font_size(10)));
-                        doc.push(elements::Break::new(0.3));
+                        if paragraph_has_text {
+                            stats.paragraphs += 1;
+                            doc.push(p.styled(style::Style::new().with_font_size(10)));
+                            doc.push(elements::Break::new(0.3));
+                        }
                     }
                 }
             }
@@ -158,13 +201,18 @@ pub fn convert_markdown_to_pdf(
                     };
 
                     if img_path.exists() {
-                        if let Ok(img) = elements::Image::from_path(&img_path) {
-                            if verbose {
-                                println!("  [v] Вбудовування зображення у PDF: {}", img_path.display());
+                        match load_image_rgb(&img_path) {
+                            Ok(img) => {
+                                if verbose {
+                                    println!("  [v] Вбудовування зображення у PDF: {}", img_path.display());
+                                }
+                                doc.push(elements::Break::new(0.4));
+                                doc.push(img);
+                                doc.push(elements::Break::new(0.4));
                             }
-                            doc.push(elements::Break::new(0.4));
-                            doc.push(img.with_scale(genpdf::Scale::new(0.55, 0.55)).with_alignment(Alignment::Center));
-                            doc.push(elements::Break::new(0.4));
+                            Err(e) => {
+                                eprintln!("  [!] Помилка завантаження зображення {}: {}", img_path.display(), e);
+                            }
                         }
                     } else if verbose {
                         eprintln!("  [!] Зображення не знайдено: {}", img_path.display());
@@ -187,14 +235,17 @@ pub fn convert_markdown_to_pdf(
                 if lang_clean == "mermaid" {
                     stats.mermaid_diagrams += 1;
                     if let Some(png_bytes) = crate::mermaid::render_mermaid(&code_content, verbose) {
-                        let tmp_file = std::env::temp_dir().join(format!("mermaid_rust_{}.png", std::process::id()));
-                        if fs::write(&tmp_file, &png_bytes).is_ok() {
-                            if let Ok(img) = elements::Image::from_path(&tmp_file) {
+                        match load_image_bytes_rgb(&png_bytes) {
+                            Ok(img) => {
                                 doc.push(elements::Break::new(0.5));
-                                doc.push(img.with_scale(genpdf::Scale::new(0.55, 0.55)).with_alignment(Alignment::Center));
+                                doc.push(img);
                                 doc.push(elements::Break::new(0.5));
                             }
-                            let _ = fs::remove_file(&tmp_file);
+                            Err(e) => {
+                                if verbose {
+                                    eprintln!("  [!] Помилка вбудовування діаграми Mermaid: {}", e);
+                                }
+                            }
                         }
                     }
                 } else {
@@ -294,6 +345,9 @@ pub fn convert_markdown_to_pdf(
                 } else if in_image {
                     // image description
                 } else if let Some(ref mut p) = current_paragraph {
+                    if !txt.trim().is_empty() {
+                        paragraph_has_text = true;
+                    }
                     let mut st = style::Style::new();
                     if bold {
                         st = st.bold();
@@ -309,6 +363,9 @@ pub fn convert_markdown_to_pdf(
                 if in_table {
                     current_cell_text.push_str(&txt);
                 } else if let Some(ref mut p) = current_paragraph {
+                    if !txt.trim().is_empty() {
+                        paragraph_has_text = true;
+                    }
                     p.push_styled(txt.to_string(), style::Style::new().bold());
                 }
             }
@@ -333,4 +390,20 @@ pub fn convert_markdown_to_pdf(
         .map_err(|e| format!("Помилка запису PDF файлу {}: {}", output_path.display(), e))?;
 
     Ok(stats)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_image_events() {
+        let md = "# Тест\n\n![Щоденна динаміка](charts/daily_generation_timeline.png)\n";
+        let out_pdf = std::env::temp_dir().join("test_img_render.pdf");
+        let source_dir = Path::new("/home/andy/garb/analyse/teplomerezha");
+        let res = convert_markdown_to_pdf(md, &out_pdf, Some(source_dir), true);
+        assert!(res.is_ok(), "Не вдалося сконвертувати PDF з графіком: {:?}", res);
+        assert!(out_pdf.exists());
+        let _ = std::fs::remove_file(&out_pdf);
+    }
 }

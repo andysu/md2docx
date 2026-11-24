@@ -58,6 +58,7 @@ fn get_callout_style(alert_type: &str) -> CalloutStyle {
     }
 }
 
+#[derive(Debug)]
 pub struct ConvertStats {
     pub headings: usize,
     pub paragraphs: usize,
