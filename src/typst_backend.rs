@@ -27,6 +27,13 @@ impl TypstWorld {
         let mut book = FontBook::new();
         let mut fonts = Vec::new();
 
+        // 0. Вбудований основний шрифт Roboto Flex
+        let roboto_bytes = Bytes::new(include_bytes!("../assets/fonts/RobotoFlex.ttf").as_slice());
+        for font in Font::iter(roboto_bytes) {
+            book.push(font.info().clone());
+            fonts.push(font);
+        }
+
         // 1. Вбудовані шрифти typst-assets
         for bytes in typst_assets::fonts() {
             let bytes = Bytes::new(bytes);
@@ -188,14 +195,14 @@ pub fn markdown_to_typst(md_text: &str) -> (String, TypstStats) {
   paper: "a4",
   margin: (x: 16mm, top: 16mm, bottom: 16mm),
   header: align(right)[
-    #text(size: 8pt, fill: rgb("#718096"), font: ("DejaVu Sans", "Liberation Sans"))[
+    #text(size: 8pt, fill: rgb("#718096"), font: ("Roboto Flex", "DejaVu Sans", "Liberation Sans"))[
       Аудит СЕС «Тепломережа» | Конфіденційно
     ]
   ],
   footer: context {
     let page_number = counter(page).get().first()
     let total_pages = counter(page).final().first()
-    set text(size: 8.5pt, fill: rgb("#718096"), font: ("DejaVu Sans", "Liberation Sans"))
+    set text(size: 8.5pt, fill: rgb("#718096"), font: ("Roboto Flex", "DejaVu Sans", "Liberation Sans"))
     grid(
       columns: (1fr, auto),
       align(left)[Звіт інженерного аналізу генерації],
@@ -205,7 +212,7 @@ pub fn markdown_to_typst(md_text: &str) -> (String, TypstStats) {
 )
 
 #set text(
-  font: ("DejaVu Sans", "Liberation Sans"),
+  font: ("Roboto Flex", "DejaVu Sans", "Liberation Sans"),
   size: 9.5pt,
   fill: rgb("#2d3748"),
   lang: "uk"
@@ -213,7 +220,7 @@ pub fn markdown_to_typst(md_text: &str) -> (String, TypstStats) {
 
 #set par(justify: true, leading: 0.6em)
 
-#show heading: set text(fill: rgb("#1a202c"), font: ("DejaVu Sans", "Liberation Sans"))
+#show heading: set text(fill: rgb("#1a202c"), font: ("Roboto Flex", "DejaVu Sans", "Liberation Sans"))
 #show heading.where(level: 1): it => block(spacing: 1.2em)[
   #text(size: 15pt, weight: "bold", fill: rgb("#0d6efd"))[#it.body]
   #v(0.25em)
